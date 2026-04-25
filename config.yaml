@@ -8,6 +8,7 @@ arch:
 startup: application
 boot: auto
 hassio_api: true
+init: false
 privileged:
   - NET_ADMIN
 udev: true

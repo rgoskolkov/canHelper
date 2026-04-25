@@ -37,23 +37,53 @@ class CanHelper:
         self.is_provisioning = asyncio.Lock()
 
     def _ensure_can_interface_up(self):
-        """Checks if the CAN interface is up, and brings it up if not."""
-        try:
-            # Check if interface exists and is up
-            result = subprocess.run(['ip', 'link', 'show', self.can_interface], capture_output=True, text=True)
-            if result.returncode == 0 and "state UP" in result.stdout:
-                return True
+        """Attempts to configure the CAN interface by bringing it down, setting type/bitrate, and bringing it up."""
+        device = self.can_interface
+        bitrate = self.bitrate
 
-            logging.warning(f"CAN interface '{self.can_interface}' is down or not present. Attempting to configure and bring it up.")
-            subprocess.run(['ip', 'link', 'set', self.can_interface, 'type', 'can', 'bitrate', self.bitrate], check=True, capture_output=True)
-            subprocess.run(['ip', 'link', 'set', 'up', self.can_interface], check=True, capture_output=True)
-            logging.info(f"Successfully brought up CAN interface '{self.can_interface}'.")
+        try:
+            # Always attempt to bring the interface down first to ensure a clean state for configuration.
+            logging.info(f"Attempting to ensure CAN interface '{device}' is down for reconfiguration.")
+            try:
+                subprocess.run(['ip', 'link', 'set', device, 'down'], check=True, capture_output=True)
+                logging.info(f"CAN interface '{device}' successfully brought down (or was already down).")
+            except subprocess.CalledProcessError as e:
+                logging.warning(f"Could not bring down CAN interface '{device}' (Error: {e.stderr.strip() if e.stderr else e}). "
+                                f"This might indicate the interface does not exist or is in an unmanageable state. "
+                                "Attempting to proceed with configuration.")
+                # Do not re-raise, try to proceed with config.
+
+            # Configure type and bitrate
+            logging.info(f"Setting type 'can' and bitrate {bitrate} for CAN interface '{device}'.")
+            subprocess.run(
+                ['ip', 'link', 'set', device, 'type', 'can', 'bitrate', bitrate],
+                check=True,
+                capture_output=True
+            )
+            logging.info(f"Successfully set type 'can' and bitrate for CAN interface '{device}'.")
+
+            # Bring up the interface
+            logging.info(f"Bringing up CAN interface '{device}'.")
+            subprocess.run(
+                ['ip', 'link', 'set', device, 'up'],
+                check=True,
+                capture_output=True
+            )
+            logging.info(f"Successfully brought up CAN interface '{device}'.")
+                
             return True
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            logging.error(f"Failed to bring up CAN interface '{self.can_interface}'. Error: {e.stderr if isinstance(e, subprocess.CalledProcessError) else e}")
+
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Failed to configure CAN interface '{device}'. Error: {e.stderr.strip() if e.stderr else e}.")
+            return False
+        except FileNotFoundError:
+            logging.error("Required command or file not found (e.g., 'ip' command). Ensure 'iproute2' is installed and system paths are accessible.")
+            return False
+        except Exception as e:
+            logging.error(f"An unexpected error occurred while managing CAN interface '{device}': {e}")
             return False
 
-    def on_mqtt_connect(self, client, userdata, flags, rc):
+    def on_mqtt_connect(self, client, userdata, flags, rc, properties):
         logging.info("Connected to MQTT broker.")
         command_topic = f"{self.topic_prefix}/command"
         specific_id_topic = f"{self.topic_prefix}/specific_id"
@@ -174,7 +204,7 @@ class CanHelper:
             self.connect_can()
 
         # Setup MQTT
-        self.mqtt_client = mqtt.Client()
+        self.mqtt_client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
         self.mqtt_client.on_connect = self.on_mqtt_connect
         self.mqtt_client.on_message = self.on_mqtt_message
         if self.mqtt_user and self.mqtt_password:

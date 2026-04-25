@@ -1,48 +1,88 @@
-name: Build and Push Docker Image
+name: Build Addon
 
 on:
   push:
     branches:
-      - "main"
+      - main
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
   workflow_dispatch:
 
+env:
+  ARCHITECTURES: '["amd64", "aarch64"]'
+  IMAGE_NAME: canhelper
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
 jobs:
+  init:
+    name: Initialize build
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.2
+
+      - name: Get build matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.03.2
+        with:
+          architectures: ${{ env.ARCHITECTURES }}
+          image-name: ${{ env.IMAGE_NAME }}
+
   build:
+    name: Build ${{ matrix.arch }} image
+    needs: init
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.init.outputs.matrix) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.2
+
+      - name: Determine image tags
+        id: tags
+        run: |
+          if [[ "${{ github.ref_name }}" == "main" ]]; then
+            echo "tags=edge" >> $GITHUB_OUTPUT
+          else
+            echo "tags=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build image
+        id: build
+        uses: home-assistant/builder/actions/build-image@2026.03.2
+        with:
+          arch: ${{ matrix.arch }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          image: ${{ matrix.image }}
+          image-tags: ${{ steps.tags.outputs.tags }}
+          push: true
+          version: ${{ github.ref_name }}
+
+  manifest:
+    name: Publish multi-arch manifest
+    needs: [init, build]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Determine image tags
+        id: tags
+        run: |
+          if [[ "${{ github.ref_name }}" == "main" ]]; then
+            echo "tags=edge" >> $GITHUB_OUTPUT
+          else
+            echo "tags=${{ github.ref_name }},latest" >> $GITHUB_OUTPUT
+          fi
+      - name: Publish multi-arch manifest
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.03.2
         with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          architectures: ${{ env.ARCHITECTURES }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          image-name: ${{ env.IMAGE_NAME }}
+          image-tags: ${{ steps.tags.outputs.tags }}
 
-      - name: Extract metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=ref,event=branch,suffix=-dev
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}

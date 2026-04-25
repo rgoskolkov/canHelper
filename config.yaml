@@ -1,11 +1,10 @@
 name: CAN Helper
-version: "0.0.1"
+version: "edge"
 slug: canHelper
 description: "A background service to manage the CAN bus and provision new devices via MQTT."
 arch:
   - aarch64
   - amd64
-  - armv7
 startup: application
 boot: auto
 hassio_api: true

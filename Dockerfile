@@ -17,4 +17,4 @@ RUN pip3 install --no-cache-dir -r requirements.txt --break-system-packages
 COPY . .
 
 # This will be executed by run.sh
-CMD [ "python3", "-u", "src/can_helper.py" ]
+CMD [ "/run.sh" ]
